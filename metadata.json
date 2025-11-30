@@ -1,0 +1,5 @@
+{
+  "name": "AegisCrypt Web",
+  "description": "A professional, client-side encryption suite using AES-256-GCM and PBKDF2. Features drag-and-drop, bulk processing, and strict security standards comparable to native desktop tools.",
+  "requestFramePermissions": []
+}
