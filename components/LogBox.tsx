@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef } from 'react';
 import { LogEntry, LogLevel } from '../types';
 import { Terminal, XCircle, CheckCircle, Info, AlertTriangle } from 'lucide-react';

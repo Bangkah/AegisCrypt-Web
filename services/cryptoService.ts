@@ -1,20 +1,31 @@
 
 import { CRYPTO_CONSTANTS, EXTENSION_ENCRYPTED, FILE_MAGIC, FILE_VERSION, HEADER_LENGTH } from '../constants';
 
+
+
 /**
- * Utilitas untuk membersihkan memori sensitif (Best effort di JS).
+ * ==========================================
+ * AEGISCRYPT CRYPTO ENGINE (Web Crypto API)
+ * ==========================================
+ * 
+ * CORE FEATURES:
+ * 1. AES-256-GCM: Authenticated Encryption.
+ * 2. PBKDF2: Key derivation with high iteration count (100k).
+ * 3. Streaming (v2): Processes files in chunks to support large files with low RAM usage.
+ * 
+ * AUDIT NOTES:
+ * - IV Uniqueness: Generated freshly for EVERY chunk.
+ * - Memory Safety: Uses Blob construction to avoid contiguous heap allocation.
  */
-export const wipeMemory = (buffer: Uint8Array) => {
-  buffer.fill(0);
-};
 
 export const generateSalt = (): Uint8Array => window.crypto.getRandomValues(new Uint8Array(CRYPTO_CONSTANTS.SALT_LENGTH));
 export const generateIV = (): Uint8Array => window.crypto.getRandomValues(new Uint8Array(CRYPTO_CONSTANTS.IV_LENGTH));
 
 /**
- * Menyiapkan Key Material dengan Hashing SHA-256 untuk Keyfile.
+ * 🔑 KEY PREPARATION
+ * Combines Password + Optional Keyfile into a single byte array.
  */
-const prepareKeyMaterial = async (password: string, keyFileBuffer?: ArrayBuffer | null): Promise<Uint8Array> => {
+export const prepareKeyMaterial = async (password: string, keyFileBuffer?: ArrayBuffer | null): Promise<Uint8Array> => {
   const encoder = new TextEncoder();
   const passwordBytes = encoder.encode(password);
 
@@ -31,7 +42,10 @@ const prepareKeyMaterial = async (password: string, keyFileBuffer?: ArrayBuffer 
   return combined;
 };
 
-const deriveKey = async (keyMaterialRaw: Uint8Array, salt: Uint8Array, usage: KeyUsage[]): Promise<CryptoKey> => {
+/**
+ * 🗝️ KEY DERIVATION (PBKDF2)
+ */
+export const deriveKey = async (keyMaterialRaw: Uint8Array, salt: Uint8Array, usage: KeyUsage[]): Promise<CryptoKey> => {
   const keyMaterial = await window.crypto.subtle.importKey(
     'raw',
     keyMaterialRaw,
@@ -54,6 +68,10 @@ const deriveKey = async (keyMaterialRaw: Uint8Array, salt: Uint8Array, usage: Ke
   );
 };
 
+/**
+ * Helper: Packages an encrypted chunk.
+ * Format: [Length (4 bytes)] [IV (12 bytes)] [Ciphertext]
+ */
 const packageChunk = (iv: Uint8Array, ciphertext: ArrayBuffer): Uint8Array => {
   const length = iv.byteLength + ciphertext.byteLength;
   const buffer = new Uint8Array(4 + length);
@@ -66,10 +84,8 @@ const packageChunk = (iv: Uint8Array, ciphertext: ArrayBuffer): Uint8Array => {
 };
 
 /**
- * ENCRYPTION ENGINE V2.1
- * - Streaming Chunked
- * - AbortSignal Support
- * - High Performance Time-Slicing
+ * 🔒 ENCRYPTION PROCESS (Streaming v2)
+ * Returns a Blob instead of ArrayBuffer to handle large files efficiently.
  */
 export const processFileEncrypt = async (
   file: File,
@@ -77,7 +93,7 @@ export const processFileEncrypt = async (
   keyFileBuffer: ArrayBuffer | null,
   signal: AbortSignal,
   onProgress: (bytes: number) => void
-): Promise<ArrayBuffer> => {
+): Promise<Blob> => {
   const salt = generateSalt();
   const keyMaterial = await prepareKeyMaterial(password, keyFileBuffer);
   const key = await deriveKey(keyMaterial, salt, ['encrypt']);
@@ -88,7 +104,8 @@ export const processFileEncrypt = async (
   header.set([FILE_VERSION], 5);
   header.set(salt, 6);
 
-  const chunks: Uint8Array[] = [header];
+  // Store parts as Blob parts, not a single huge ArrayBuffer
+  const chunks: (Uint8Array | Blob)[] = [header];
   let offset = 0;
   const totalSize = file.size;
 
@@ -99,6 +116,7 @@ export const processFileEncrypt = async (
     const slice = file.slice(offset, chunkEnd);
     const chunkBuffer = await slice.arrayBuffer();
     
+    // Unique IV per chunk maximizes security for GCM
     const iv = generateIV();
     const encryptedContent = await window.crypto.subtle.encrypt(
       { name: CRYPTO_CONSTANTS.ALGORITHM_AES, iv: iv },
@@ -111,24 +129,16 @@ export const processFileEncrypt = async (
     offset += chunkBuffer.byteLength;
     onProgress(offset);
     
-    // Time-slicing: Memberi napas ke UI thread setiap chunk
     await new Promise(r => setTimeout(r, 0)); 
   }
 
-  // Merge Chunks
-  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-  const result = new Uint8Array(totalLength);
-  let resultOffset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, resultOffset);
-    resultOffset += chunk.length;
-  }
-
-  return result.buffer;
+  // Create Blob directly from parts. 
+  // Browser handles memory management better than `new Uint8Array(totalLength)`
+  return new Blob(chunks, { type: 'application/octet-stream' });
 };
 
 /**
- * DECRYPTION ENGINE V2.1
+ * 🔓 DECRYPTION PROCESS (Streaming v2)
  */
 export const processFileDecrypt = async (
   fileBuffer: ArrayBuffer,
@@ -136,11 +146,11 @@ export const processFileDecrypt = async (
   keyFileBuffer: ArrayBuffer | null,
   signal: AbortSignal,
   onProgress: (bytes: number) => void
-): Promise<ArrayBuffer> => {
+): Promise<Blob> => {
   const dataView = new DataView(fileBuffer);
   const uint8View = new Uint8Array(fileBuffer);
 
-  // Header Check
+  // 1. Header Validation
   for (let i = 0; i < FILE_MAGIC.length; i++) {
     if (uint8View[i] !== FILE_MAGIC[i]) throw new Error("Format file tidak valid (.aegis required)");
   }
@@ -152,21 +162,26 @@ export const processFileDecrypt = async (
   const salt = uint8View.slice(offset, offset + CRYPTO_CONSTANTS.SALT_LENGTH);
   offset += CRYPTO_CONSTANTS.SALT_LENGTH;
 
+  // 2. Key Derivation
   const keyMaterial = await prepareKeyMaterial(password, keyFileBuffer);
   const key = await deriveKey(keyMaterial, salt, ['decrypt']);
 
   const decryptedChunks: ArrayBuffer[] = [];
   const totalLength = fileBuffer.byteLength;
 
+  // 3. Chunk Processing Loop
   while (offset < totalLength) {
     if (signal.aborted) throw new Error("Operation Cancelled");
 
-    // Read Chunk Length
+    // Read Chunk Structure
     if (offset + 4 > totalLength) break;
-    const chunkLen = dataView.getInt32(offset, true);
+    const chunkLen = dataView.getInt32(offset, true); // Length includes IV + Ciphertext + Tag
     offset += 4;
 
-    if (offset + chunkLen > totalLength) throw new Error("File corrupt: Unexpected EOF");
+    // Security Audit: Sanity check chunk length
+    if (chunkLen < 0 || offset + chunkLen > totalLength) {
+        throw new Error("File corrupt or tampered: Invalid chunk size definition.");
+    }
 
     const iv = uint8View.slice(offset, offset + CRYPTO_CONSTANTS.IV_LENGTH);
     const ciphertext = uint8View.slice(offset + CRYPTO_CONSTANTS.IV_LENGTH, offset + chunkLen);
@@ -187,20 +202,15 @@ export const processFileDecrypt = async (
     await new Promise(r => setTimeout(r, 0));
   }
 
-  // Merge
-  const finalSize = decryptedChunks.reduce((acc, c) => acc + c.byteLength, 0);
-  const result = new Uint8Array(finalSize);
-  let writeOffset = 0;
-  for (const chunk of decryptedChunks) {
-    result.set(new Uint8Array(chunk), writeOffset);
-    writeOffset += chunk.byteLength;
-  }
-
-  return result.buffer;
+  return new Blob(decryptedChunks, { type: 'application/octet-stream' });
 };
 
-export const downloadBlob = (data: ArrayBuffer, filename: string) => {
-  const blob = new Blob([data], { type: 'application/octet-stream' });
+// --- Utilities ---
+
+export const downloadBlob = (data: Blob | ArrayBuffer, filename: string) => {
+  // If input is ArrayBuffer, convert to Blob. If Blob, use directly.
+  const blob = data instanceof Blob ? data : new Blob([data], { type: 'application/octet-stream' });
+  
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

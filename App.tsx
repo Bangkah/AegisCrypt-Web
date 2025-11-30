@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useRef } from 'react';
 import { 
   Shield, RefreshCw, LogOut, Lock, Unlock, Key,
@@ -15,18 +16,30 @@ import {
   getDecryptedFilename 
 } from './services/cryptoService';
 
+/**
+ * MAIN APPLICATION COMPONENT
+ * Handles:
+ * 1. Authentication State (Login/Logout)
+ * 2. File Queue Management (Drag & Drop)
+ * 3. Encryption/Decryption Orchestration
+ * 4. UI Feedback (Logs, Progress, Animations)
+ */
 export default function App() {
-  const [session, setSession] = useState<AuthSession | null>(null);
-  
-  const [files, setFiles] = useState<File[]>([]);
+  // --- State Management ---
+  const [session, setSession] = useState<AuthSession | null>(null); // Holds Password & Keyfile
+  const [files, setFiles] = useState<File[]>([]); // Current Queue
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  
+  // UI Status Flags
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [progress, setProgress] = useState<CryptoProgress | null>(null);
   
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Refs for non-rendering variables
+  const abortControllerRef = useRef<AbortController | null>(null); // To cancel operations
+  const fileInputRef = useRef<HTMLInputElement>(null); // Hidden file input
 
+  // Logger Helper
   const addLog = useCallback((message: string, level: LogLevel = LogLevel.INFO) => {
     setLogs(prev => [...prev, {
       id: crypto.randomUUID(),
@@ -36,6 +49,7 @@ export default function App() {
     }]);
   }, []);
 
+  // --- Drag & Drop Handlers ---
   const handleDragEnter = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
   const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); };
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
@@ -44,19 +58,21 @@ export default function App() {
     e.preventDefault(); e.stopPropagation();
     setIsDragging(false);
     if (e.dataTransfer.files?.length) {
+      // Convert FileList to Array and add to queue
       const newFiles = Array.from(e.dataTransfer.files);
       setFiles(prev => [...prev, ...newFiles]);
       addLog(`Added ${newFiles.length} files to queue.`, LogLevel.INFO);
     }
   };
 
+  // Standard File Input Handler
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) {
       const newFiles = Array.from(e.target.files);
       setFiles(prev => [...prev, ...newFiles]);
       addLog(`Added ${newFiles.length} files to queue.`, LogLevel.INFO);
     }
-    // Reset input agar bisa select file yang sama lagi jika perlu
+    // Reset input to allow selecting the same file again if needed
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -64,22 +80,27 @@ export default function App() {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  // --- Core Operations ---
+
   const cancelOperation = () => {
     if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+      abortControllerRef.current.abort(); // Triggers exception in cryptoService
       addLog('Operation cancelled by user.', LogLevel.WARNING);
-      // State reset handled in finally block
     }
   };
 
   const handleLogout = () => {
     if (isProcessing) return;
-    setSession(null);
+    setSession(null); // Clears keys from memory
     setFiles([]);
     setLogs([]);
     setProgress(null);
   };
 
+  /**
+   * Orchestrates the batch processing of files.
+   * Iterates through the file queue and calls cryptoService for each.
+   */
   const runCrypto = async (mode: 'ENCRYPT' | 'DECRYPT') => {
     if (!session) return;
     if (!files.length) return addLog('No files in queue.', LogLevel.WARNING);
@@ -91,6 +112,7 @@ export default function App() {
     let successCount = 0;
 
     try {
+      // Batch Loop
       for (let i = 0; i < files.length; i++) {
         if (signal.aborted) break;
         
@@ -99,14 +121,16 @@ export default function App() {
         
         addLog(`Starting ${mode}: ${file.name}`, LogLevel.INFO);
 
-        let resultBuffer: ArrayBuffer;
+        // Result can be Blob or ArrayBuffer, service handles chunking
+        let resultData: Blob | ArrayBuffer;
         
+        // Progress Callback: Calculates Speed & ETA
         const updateProgress = (bytes: number) => {
           const now = performance.now();
           const elapsedSec = (now - startTime) / 1000;
-          const speed = elapsedSec > 0 ? (bytes / 1024 / 1024) / elapsedSec : 0; 
+          const speed = elapsedSec > 0 ? (bytes / 1024 / 1024) / elapsedSec : 0; // MB/s
           const remainingBytes = file.size - bytes;
-          const eta = speed > 0 ? remainingBytes / 1024 / 1024 / speed : 0;
+          const eta = speed > 0 ? remainingBytes / 1024 / 1024 / speed : 0; // Seconds
 
           setProgress({
             percent: Math.min(100, (bytes / file.size) * 100),
@@ -120,12 +144,12 @@ export default function App() {
 
         try {
           if (mode === 'ENCRYPT') {
-            resultBuffer = await processFileEncrypt(file, session.password, session.keyFileBuffer, signal, updateProgress);
-            downloadBlob(resultBuffer, getEncryptedFilename(file.name));
+            resultData = await processFileEncrypt(file, session.password, session.keyFileBuffer, signal, updateProgress);
+            downloadBlob(resultData, getEncryptedFilename(file.name));
           } else {
             const buffer = await file.arrayBuffer();
-            resultBuffer = await processFileDecrypt(buffer, session.password, session.keyFileBuffer, signal, updateProgress);
-            downloadBlob(resultBuffer, getDecryptedFilename(file.name));
+            resultData = await processFileDecrypt(buffer, session.password, session.keyFileBuffer, signal, updateProgress);
+            downloadBlob(resultData, getDecryptedFilename(file.name));
           }
           addLog(`${mode} Success: ${file.name}`, LogLevel.SUCCESS);
           successCount++;
@@ -137,16 +161,18 @@ export default function App() {
     } catch (err: any) {
       if (!signal.aborted) addLog(`System Error: ${err.message}`, LogLevel.ERROR);
     } finally {
+      // Cleanup
       setIsProcessing(false);
       setProgress(null);
       abortControllerRef.current = null;
       if (successCount === files.length && files.length > 0 && !abortControllerRef.current?.signal.aborted) {
         addLog(`Batch Process Completed.`, LogLevel.SUCCESS);
-        setFiles([]); 
+        setFiles([]); // Clear queue on full success
       }
     }
   };
 
+  // Redirect to Login if no session
   if (!session) return <LoginScreen onLogin={setSession} />;
 
   return (
@@ -165,7 +191,7 @@ export default function App() {
         </div>
         
         <div className="flex items-center gap-4">
-           {/* Session Info */}
+           {/* Session Info Indicator */}
            <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900/50 border border-slate-700/50 text-xs backdrop-blur-sm">
               <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
               <span className="text-slate-400">Auth:</span>
@@ -189,7 +215,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <main className="flex-1 flex flex-col lg:flex-row gap-6 p-6 lg:p-8 max-w-7xl mx-auto w-full overflow-hidden">
         
         {/* Left Panel: File Management */}
@@ -205,7 +231,7 @@ export default function App() {
                 : 'border-slate-800 hover:border-slate-600'
             }`}
           >
-            {/* Overlay if Dragging */}
+            {/* Drag Overlay */}
             {isDragging && (
                <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
                  <div className="text-center animate-bounce">
@@ -229,7 +255,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Empty State or File List */}
+            {/* Queue Content: Empty State vs FileList */}
             {files.length === 0 ? (
               <div 
                 onClick={() => !isProcessing && fileInputRef.current?.click()}
@@ -264,10 +290,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Panel: Controls & Telemetry */}
+        {/* Right Panel: Action Controls & Telemetry */}
         <div className="flex-1 flex flex-col gap-6 min-w-0">
           
-          {/* Action Grid */}
+          {/* Action Buttons */}
           <div className="grid grid-cols-2 gap-4">
             <button
               onClick={() => runCrypto('ENCRYPT')}
@@ -284,66 +310,63 @@ export default function App() {
             <button
               onClick={() => runCrypto('DECRYPT')}
               disabled={isProcessing || !files.length}
-              className="group relative overflow-hidden p-6 rounded-2xl flex flex-col items-center justify-center gap-3 transition-all duration-300 shadow-lg disabled:opacity-50 disabled:grayscale hover:-translate-y-1 bg-slate-800 hover:bg-slate-750 border border-slate-600"
+              className="group relative overflow-hidden p-6 rounded-2xl flex flex-col items-center justify-center gap-3 transition-all duration-300 shadow-lg disabled:opacity-50 disabled:grayscale hover:-translate-y-1 bg-slate-800 hover:bg-slate-750 border border-slate-600 hover:border-slate-500"
             >
-              <Unlock className="w-8 h-8 text-purple-400 group-hover:scale-110 transition-transform" />
+              <Unlock className="w-8 h-8 text-emerald-400 group-hover:scale-110 transition-transform" />
               <div className="text-center">
-                <span className="block font-bold text-slate-200 text-lg">Decrypt</span>
+                <span className="block font-bold text-slate-200 text-lg group-hover:text-white">Decrypt</span>
               </div>
             </button>
           </div>
 
-          {/* Active Process Card */}
-          {isProcessing && progress && (
-            <div className="glass-panel p-6 rounded-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-4 border-l-4 border-l-blue-500 relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                 <RefreshCw className="w-24 h-24 animate-spin" />
-              </div>
-              
-              <div className="flex justify-between items-start mb-6 relative z-10">
-                <div>
-                  <h4 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
-                    Processing...
-                  </h4>
-                  <p className="text-xs text-slate-400 mt-1 font-mono">{progress.currentFile}</p>
+          {/* Progress & Telemetry Card */}
+          <div className="glass-panel rounded-2xl p-5 border-t-2 border-t-blue-500/50">
+             <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                   <RefreshCw className={`w-4 h-4 text-blue-400 ${isProcessing ? 'animate-spin' : ''}`} />
+                   <span className="text-sm font-semibold text-slate-200">Operation Status</span>
                 </div>
-                <button onClick={cancelOperation} className="group p-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all">
-                  <StopCircle className="w-5 h-5 group-hover:scale-110" />
-                </button>
-              </div>
+                {isProcessing && (
+                  <button onClick={cancelOperation} className="text-xs text-rose-400 hover:text-rose-300 flex items-center gap-1">
+                     <StopCircle className="w-3 h-3" /> CANCEL
+                  </button>
+                )}
+             </div>
 
-              {/* Progress Bar */}
-              <div className="relative h-2 w-full bg-slate-900 rounded-full overflow-hidden mb-6 border border-slate-800 relative z-10">
-                 <div 
-                    className="absolute h-full bg-gradient-to-r from-blue-500 via-cyan-400 to-emerald-400 transition-all duration-100 ease-linear shadow-[0_0_15px_rgba(56,189,248,0.5)]" 
-                    style={{ width: `${progress.percent}%` }} 
-                 />
-              </div>
-
-              {/* Stats */}
-              <div className="grid grid-cols-3 gap-3 relative z-10">
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-white/5 backdrop-blur-sm">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Speed</div>
-                  <div className="text-sm font-mono font-bold text-white">{progress.speed.toFixed(1)} <span className="text-[10px] text-slate-500">MB/s</span></div>
+             {/* Progress Bar */}
+             <div className="h-3 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-700 mb-2 relative">
+                {isProcessing && (
+                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-shimmer" style={{ backgroundSize: '200% 100%' }} />
+                )}
+                <div 
+                   className="h-full bg-gradient-to-r from-blue-500 to-emerald-500 transition-all duration-300 ease-out" 
+                   style={{ width: `${progress ? progress.percent : 0}%` }} 
+                />
+             </div>
+             
+             {/* Stats Grid */}
+             <div className="grid grid-cols-3 gap-2 mt-4">
+                <div className="bg-slate-900/50 rounded-lg p-2 text-center">
+                   <div className="text-[10px] text-slate-500 uppercase">Speed</div>
+                   <div className="font-mono text-sm text-emerald-400 font-bold">{progress ? progress.speed.toFixed(1) : '0.0'} <span className="text-[10px]">MB/s</span></div>
                 </div>
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-white/5 backdrop-blur-sm">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">Done</div>
-                  <div className="text-sm font-mono font-bold text-blue-400">{progress.percent.toFixed(0)}%</div>
+                <div className="bg-slate-900/50 rounded-lg p-2 text-center">
+                   <div className="text-[10px] text-slate-500 uppercase">ETA</div>
+                   <div className="font-mono text-sm text-blue-400 font-bold">{progress ? progress.eta.toFixed(0) : '0'} <span className="text-[10px]">s</span></div>
                 </div>
-                <div className="bg-slate-950/40 p-3 rounded-xl border border-white/5 backdrop-blur-sm">
-                  <div className="text-[10px] text-slate-500 uppercase font-bold">ETA</div>
-                  <div className="text-sm font-mono font-bold text-amber-400">{progress.eta.toFixed(0)}s</div>
+                <div className="bg-slate-900/50 rounded-lg p-2 text-center">
+                   <div className="text-[10px] text-slate-500 uppercase">Current</div>
+                   <div className="font-mono text-xs text-slate-300 truncate max-w-[80px] mx-auto">{progress ? progress.currentFile : '-'}</div>
                 </div>
-              </div>
-            </div>
-          )}
+             </div>
+          </div>
 
           {/* Logs */}
-          <div className="flex-1 min-h-[250px] flex flex-col rounded-2xl overflow-hidden glass-panel border-t border-white/10 shadow-lg">
-            <LogBox logs={logs} onClear={() => setLogs([])} />
+          <div className="flex-1 min-h-0">
+             <LogBox logs={logs} onClear={() => setLogs([])} />
           </div>
         </div>
+
       </main>
     </div>
   );

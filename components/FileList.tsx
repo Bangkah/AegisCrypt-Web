@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { X, FileText, Image, Film, Music, Box, Lock } from 'lucide-react';
 import { EXTENSION_ENCRYPTED } from '../constants';
@@ -5,10 +6,17 @@ import { EXTENSION_ENCRYPTED } from '../constants';
 interface FileListProps {
   files: File[];
   onRemove: (index: number) => void;
-  disabled: boolean;
+  disabled: boolean; // Disables remove buttons during processing
 }
 
+/**
+ * FILE LIST COMPONENT
+ * Renders a visual queue of files waiting to be processed.
+ * Includes icons based on file type and a remove button.
+ */
 export const FileList: React.FC<FileListProps> = ({ files, onRemove, disabled }) => {
+  
+  // Format bytes to human readable string (KB, MB, GB)
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -17,6 +25,7 @@ export const FileList: React.FC<FileListProps> = ({ files, onRemove, disabled })
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
+  // Determine Icon based on extension
   const getFileIcon = (filename: string) => {
     if (filename.endsWith(EXTENSION_ENCRYPTED)) return <Lock className="w-5 h-5 text-emerald-400" />;
     const ext = filename.split('.').pop()?.toLowerCase();
