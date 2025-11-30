@@ -10,6 +10,10 @@ AegisCrypt Web is a modern, high-performance encryption tool built with **React*
 
 ---
 
+![img](image.png)
+
+---
+
 ## Features
 
 - **Zero-Knowledge Architecture**: All encryption happens in your browser's memory. No files are ever uploaded to a server.
