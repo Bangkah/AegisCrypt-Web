@@ -1,3 +1,4 @@
+
 export enum LogLevel {
   INFO = 'INFO',
   SUCCESS = 'SUCCESS',
@@ -29,5 +30,5 @@ export interface ProcessedFileHistory {
 
 export interface EncryptionConfig {
   password: string;
-  salt?: Uint8Array; // For decryption, extracted from file
+  keyFile?: File | null;
 }

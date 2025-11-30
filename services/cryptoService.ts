@@ -1,3 +1,4 @@
+
 import { CRYPTO_CONSTANTS, EXTENSION_ENCRYPTED, FILE_MAGIC, FILE_VERSION, HEADER_LENGTH } from '../constants';
 
 /**
@@ -15,15 +16,31 @@ export const generateIV = (): Uint8Array => {
 };
 
 /**
- * Derives a cryptographic key from a password using PBKDF2.
+ * Prepares the key material by combining password and optional keyfile.
  */
-const deriveKey = async (password: string, salt: Uint8Array, usage: KeyUsage[]): Promise<CryptoKey> => {
-  const textEncoder = new TextEncoder();
-  const passwordBuffer = textEncoder.encode(password);
+const prepareKeyMaterial = async (password: string, keyFileBuffer?: ArrayBuffer | null): Promise<Uint8Array> => {
+  const encoder = new TextEncoder();
+  const passwordBytes = encoder.encode(password);
 
+  if (!keyFileBuffer) {
+    return passwordBytes;
+  }
+
+  const keyFileHash = await window.crypto.subtle.digest('SHA-256', keyFileBuffer);
+  const combined = new Uint8Array(passwordBytes.length + keyFileHash.byteLength);
+  combined.set(passwordBytes, 0);
+  combined.set(new Uint8Array(keyFileHash), passwordBytes.length);
+
+  return combined;
+};
+
+/**
+ * Derives a cryptographic key using PBKDF2.
+ */
+const deriveKey = async (keyMaterialRaw: Uint8Array, salt: Uint8Array, usage: KeyUsage[]): Promise<CryptoKey> => {
   const keyMaterial = await window.crypto.subtle.importKey(
     'raw',
-    passwordBuffer,
+    keyMaterialRaw,
     { name: CRYPTO_CONSTANTS.ALGORITHM_KDF },
     false,
     ['deriveBits', 'deriveKey']
@@ -44,118 +61,149 @@ const deriveKey = async (password: string, salt: Uint8Array, usage: KeyUsage[]):
 };
 
 /**
- * Encrypts file data using AES-256-GCM and wraps it in the .aegis format.
- * Format: [Magic "AEGIS" (5b)] [Version (1b)] [Salt (16b)] [IV (12b)] [Ciphertext + Tag]
+ * Helper to write a Chunk: [4b Length][12b IV][Ciphertext + Tag]
  */
-export const encryptFileContent = async (fileBuffer: ArrayBuffer, password: string): Promise<ArrayBuffer> => {
-  try {
-    const salt = generateSalt();
+const packageChunk = (iv: Uint8Array, ciphertext: ArrayBuffer): Uint8Array => {
+  const length = iv.byteLength + ciphertext.byteLength;
+  const buffer = new Uint8Array(4 + length);
+  const view = new DataView(buffer.buffer);
+  
+  view.setInt32(0, length, true); // Little Endian Length
+  buffer.set(iv, 4);
+  buffer.set(new Uint8Array(ciphertext), 4 + iv.byteLength);
+  
+  return buffer;
+};
+
+/**
+ * Streaming Encryption (Chunked).
+ * Simulates streaming by processing chunks to avoid UI freeze and excessive RAM usage.
+ */
+export const processFileEncrypt = async (
+  file: File,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  onProgress: (percent: number) => void
+): Promise<ArrayBuffer> => {
+  const salt = generateSalt();
+  const keyMaterial = await prepareKeyMaterial(password, keyFileBuffer);
+  const key = await deriveKey(keyMaterial, salt, ['encrypt']);
+
+  // Header Construction
+  const header = new Uint8Array(HEADER_LENGTH);
+  header.set(FILE_MAGIC, 0);
+  header.set([FILE_VERSION], 5);
+  header.set(salt, 6);
+
+  const chunks: Uint8Array[] = [header];
+  let processedBytes = 0;
+  const totalSize = file.size;
+
+  // Process in Chunks
+  for (let offset = 0; offset < totalSize; offset += CRYPTO_CONSTANTS.CHUNK_SIZE) {
+    const slice = file.slice(offset, offset + CRYPTO_CONSTANTS.CHUNK_SIZE);
+    const chunkBuffer = await slice.arrayBuffer();
+    
     const iv = generateIV();
-    const key = await deriveKey(password, salt, ['encrypt']);
-
     const encryptedContent = await window.crypto.subtle.encrypt(
-      {
-        name: CRYPTO_CONSTANTS.ALGORITHM_AES,
-        iv: iv,
-        tagLength: CRYPTO_CONSTANTS.TAG_LENGTH_BITS,
-      },
+      { name: CRYPTO_CONSTANTS.ALGORITHM_AES, iv: iv },
       key,
-      fileBuffer
+      chunkBuffer
     );
 
-    // Prepare Header Components
-    const magic = FILE_MAGIC;
-    const version = new Uint8Array([FILE_VERSION]);
-
-    // Calculate Total Size
-    const totalSize = magic.length + version.length + salt.byteLength + iv.byteLength + encryptedContent.byteLength;
-    const resultBuffer = new Uint8Array(totalSize);
+    chunks.push(packageChunk(iv, encryptedContent));
     
-    // Construct the Binary File
-    let offset = 0;
+    processedBytes += chunkBuffer.byteLength;
+    onProgress(Math.min(99, Math.round((processedBytes / totalSize) * 100)));
     
-    resultBuffer.set(magic, offset);
-    offset += magic.length;
-
-    resultBuffer.set(version, offset);
-    offset += version.length;
-
-    resultBuffer.set(salt, offset);
-    offset += salt.byteLength;
-
-    resultBuffer.set(iv, offset);
-    offset += iv.byteLength;
-
-    resultBuffer.set(new Uint8Array(encryptedContent), offset);
-
-    return resultBuffer.buffer;
-  } catch (error) {
-    console.error("Encryption failed:", error);
-    throw new Error("Encryption failed. Please check parameters.");
+    // Allow UI thread to breathe
+    await new Promise(r => setTimeout(r, 0));
   }
+
+  // Combine all chunks into one blob (Browser limitation: Must hold file in RAM to download as Blob)
+  // In a real stream scenario (FileSystem API), we would write these chunks directly to disk.
+  const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+  const result = new Uint8Array(totalLength);
+  let resultOffset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, resultOffset);
+    resultOffset += chunk.length;
+  }
+
+  return result.buffer;
 };
 
 /**
- * Decrypts .aegis file data.
- * Validates Magic Header and Version before decryption.
+ * Streaming Decryption (Chunked)
  */
-export const decryptFileContent = async (fileBuffer: ArrayBuffer, password: string): Promise<ArrayBuffer> => {
-  try {
-    if (fileBuffer.byteLength < HEADER_LENGTH) {
-      throw new Error("File is too small. Corrupted or invalid format.");
-    }
+export const processFileDecrypt = async (
+  fileBuffer: ArrayBuffer,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  onProgress: (percent: number) => void
+): Promise<ArrayBuffer> => {
+  const dataView = new DataView(fileBuffer);
+  const uint8View = new Uint8Array(fileBuffer);
 
-    const dataView = new Uint8Array(fileBuffer);
-    
-    // 1. Validate Magic Header ("AEGIS")
-    for (let i = 0; i < FILE_MAGIC.length; i++) {
-      if (dataView[i] !== FILE_MAGIC[i]) {
-        throw new Error("Invalid file format. Not an .aegis file.");
-      }
-    }
-
-    // 2. Validate Version
-    const version = dataView[FILE_MAGIC.length];
-    if (version !== FILE_VERSION) {
-      throw new Error(`Unsupported file version: v${version}. Please update AegisCrypt.`);
-    }
-
-    let offset = FILE_MAGIC.length + 1; // Magic (5) + Version (1)
-
-    // 3. Extract Metadata
-    const salt = dataView.slice(offset, offset + CRYPTO_CONSTANTS.SALT_LENGTH);
-    offset += CRYPTO_CONSTANTS.SALT_LENGTH;
-
-    const iv = dataView.slice(offset, offset + CRYPTO_CONSTANTS.IV_LENGTH);
-    offset += CRYPTO_CONSTANTS.IV_LENGTH;
-
-    const ciphertext = dataView.slice(offset);
-
-    // 4. Decrypt
-    const key = await deriveKey(password, salt, ['decrypt']);
-
-    const decryptedContent = await window.crypto.subtle.decrypt(
-      {
-        name: CRYPTO_CONSTANTS.ALGORITHM_AES,
-        iv: iv,
-        tagLength: CRYPTO_CONSTANTS.TAG_LENGTH_BITS,
-      },
-      key,
-      ciphertext
-    );
-
-    return decryptedContent;
-  } catch (error: any) {
-    console.error("Decryption failed:", error);
-    if (error.message.includes("Invalid file format")) throw error;
-    if (error.message.includes("Unsupported file version")) throw error;
-    throw new Error("Decryption failed. Incorrect password or corrupted file.");
+  // 1. Validate Header
+  for (let i = 0; i < FILE_MAGIC.length; i++) {
+    if (uint8View[i] !== FILE_MAGIC[i]) throw new Error("Invalid .aegis file");
   }
+  
+  const version = uint8View[FILE_MAGIC.length];
+  if (version !== 2) throw new Error(`Version mismatch. File is v${version}, App expects v2.`);
+
+  let offset = 6; // Magic(5) + Version(1)
+  const salt = uint8View.slice(offset, offset + CRYPTO_CONSTANTS.SALT_LENGTH);
+  offset += CRYPTO_CONSTANTS.SALT_LENGTH;
+
+  const keyMaterial = await prepareKeyMaterial(password, keyFileBuffer);
+  const key = await deriveKey(keyMaterial, salt, ['decrypt']);
+
+  const decryptedChunks: ArrayBuffer[] = [];
+  const totalLength = fileBuffer.byteLength;
+
+  while (offset < totalLength) {
+    // Read Chunk Length
+    if (offset + 4 > totalLength) break;
+    const chunkLen = dataView.getInt32(offset, true);
+    offset += 4;
+
+    if (offset + chunkLen > totalLength) throw new Error("Corrupted file: Unexpected EOF");
+
+    // Read IV + Ciphertext
+    const chunkData = uint8View.slice(offset, offset + chunkLen);
+    const iv = chunkData.slice(0, CRYPTO_CONSTANTS.IV_LENGTH);
+    const ciphertext = chunkData.slice(CRYPTO_CONSTANTS.IV_LENGTH);
+
+    try {
+      const decrypted = await window.crypto.subtle.decrypt(
+        { name: CRYPTO_CONSTANTS.ALGORITHM_AES, iv: iv },
+        key,
+        ciphertext
+      );
+      decryptedChunks.push(decrypted);
+    } catch (e) {
+      throw new Error("Decryption failed. Bad password or corrupted chunk.");
+    }
+
+    offset += chunkLen;
+    onProgress(Math.min(99, Math.round((offset / totalLength) * 100)));
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  // Combine
+  const finalSize = decryptedChunks.reduce((acc, c) => acc + c.byteLength, 0);
+  const result = new Uint8Array(finalSize);
+  let writeOffset = 0;
+  for (const chunk of decryptedChunks) {
+    result.set(new Uint8Array(chunk), writeOffset);
+    writeOffset += chunk.byteLength;
+  }
+
+  return result.buffer;
 };
 
-/**
- * Helper to download the processed file
- */
 export const downloadBlob = (data: ArrayBuffer, filename: string) => {
   const blob = new Blob([data], { type: 'application/octet-stream' });
   const url = window.URL.createObjectURL(blob);
@@ -168,13 +216,9 @@ export const downloadBlob = (data: ArrayBuffer, filename: string) => {
   document.body.removeChild(a);
 };
 
-export const getEncryptedFilename = (originalName: string): string => {
-  return `${originalName}${EXTENSION_ENCRYPTED}`;
-};
-
+export const getEncryptedFilename = (originalName: string): string => `${originalName}${EXTENSION_ENCRYPTED}`;
 export const getDecryptedFilename = (encryptedName: string): string => {
-  if (encryptedName.endsWith(EXTENSION_ENCRYPTED)) {
-    return encryptedName.slice(0, -EXTENSION_ENCRYPTED.length);
-  }
-  return `decrypted_${encryptedName}`;
+  return encryptedName.endsWith(EXTENSION_ENCRYPTED) 
+    ? encryptedName.slice(0, -EXTENSION_ENCRYPTED.length) 
+    : `decrypted_${encryptedName}`;
 };
