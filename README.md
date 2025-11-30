@@ -10,7 +10,7 @@ AegisCrypt Web is a modern, high-performance encryption tool built with **React*
 
 ---
 
-## 🚀 Features
+## Features
 
 - **Zero-Knowledge Architecture**: All encryption happens in your browser's memory. No files are ever uploaded to a server.
 - **Industry Standard Security**:
@@ -27,7 +27,7 @@ AegisCrypt Web is a modern, high-performance encryption tool built with **React*
 
 ---
 
-## 🛠️ Technical Specifications
+## Technical Specifications
 
 AegisCrypt uses the browser's native `window.crypto.subtle` API for maximum performance and security.
 
@@ -47,7 +47,7 @@ The output `.enc` file follows this binary structure:
 
 ---
 
-## 📦 Installation & Usage
+## Installation & Usage
 
 ### Prerequisites
 - Node.js (v18 or higher)
@@ -73,7 +73,7 @@ npm run build
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 src/
@@ -90,7 +90,7 @@ src/
 
 ---
 
-## 🔒 Security Notice
+## Security Notice
 
 While this application uses industry-standard algorithms:
 1.  **Forgot Password**: If you lose your password, **your data is lost forever**. There is no "reset" or "backdoor."
