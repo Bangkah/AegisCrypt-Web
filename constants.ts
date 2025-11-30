@@ -9,4 +9,8 @@ export const CRYPTO_CONSTANTS = {
   KEY_LENGTH: 256
 };
 
-export const EXTENSION_ENCRYPTED = '.enc';
+// Official File Format Specifications
+export const EXTENSION_ENCRYPTED = '.aegis';
+export const FILE_MAGIC = new Uint8Array([0x41, 0x45, 0x47, 0x49, 0x53]); // "AEGIS" in ASCII
+export const FILE_VERSION = 1;
+export const HEADER_LENGTH = FILE_MAGIC.length + 1 + CRYPTO_CONSTANTS.SALT_LENGTH + CRYPTO_CONSTANTS.IV_LENGTH;

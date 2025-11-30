@@ -1,4 +1,4 @@
-import { CRYPTO_CONSTANTS, EXTENSION_ENCRYPTED } from '../constants';
+import { CRYPTO_CONSTANTS, EXTENSION_ENCRYPTED, FILE_MAGIC, FILE_VERSION, HEADER_LENGTH } from '../constants';
 
 /**
  * Generates a cryptographically strong random salt.
@@ -44,8 +44,8 @@ const deriveKey = async (password: string, salt: Uint8Array, usage: KeyUsage[]):
 };
 
 /**
- * Encrypts file data using AES-256-GCM.
- * Output Format: [Salt (16b)] [IV (12b)] [Ciphertext + Tag]
+ * Encrypts file data using AES-256-GCM and wraps it in the .aegis format.
+ * Format: [Magic "AEGIS" (5b)] [Version (1b)] [Salt (16b)] [IV (12b)] [Ciphertext + Tag]
  */
 export const encryptFileContent = async (fileBuffer: ArrayBuffer, password: string): Promise<ArrayBuffer> => {
   try {
@@ -63,14 +63,30 @@ export const encryptFileContent = async (fileBuffer: ArrayBuffer, password: stri
       fileBuffer
     );
 
-    // Combine Salt + IV + Encrypted Data
-    const resultBuffer = new Uint8Array(
-      salt.byteLength + iv.byteLength + encryptedContent.byteLength
-    );
+    // Prepare Header Components
+    const magic = FILE_MAGIC;
+    const version = new Uint8Array([FILE_VERSION]);
+
+    // Calculate Total Size
+    const totalSize = magic.length + version.length + salt.byteLength + iv.byteLength + encryptedContent.byteLength;
+    const resultBuffer = new Uint8Array(totalSize);
     
-    resultBuffer.set(salt, 0);
-    resultBuffer.set(iv, salt.byteLength);
-    resultBuffer.set(new Uint8Array(encryptedContent), salt.byteLength + iv.byteLength);
+    // Construct the Binary File
+    let offset = 0;
+    
+    resultBuffer.set(magic, offset);
+    offset += magic.length;
+
+    resultBuffer.set(version, offset);
+    offset += version.length;
+
+    resultBuffer.set(salt, offset);
+    offset += salt.byteLength;
+
+    resultBuffer.set(iv, offset);
+    offset += iv.byteLength;
+
+    resultBuffer.set(new Uint8Array(encryptedContent), offset);
 
     return resultBuffer.buffer;
   } catch (error) {
@@ -80,28 +96,42 @@ export const encryptFileContent = async (fileBuffer: ArrayBuffer, password: stri
 };
 
 /**
- * Decrypts file data.
- * Expects Input Format: [Salt (16b)] [IV (12b)] [Ciphertext + Tag]
+ * Decrypts .aegis file data.
+ * Validates Magic Header and Version before decryption.
  */
 export const decryptFileContent = async (fileBuffer: ArrayBuffer, password: string): Promise<ArrayBuffer> => {
   try {
-    const minLength = CRYPTO_CONSTANTS.SALT_LENGTH + CRYPTO_CONSTANTS.IV_LENGTH;
-    if (fileBuffer.byteLength < minLength) {
-      throw new Error("File is too small to be a valid encrypted file.");
+    if (fileBuffer.byteLength < HEADER_LENGTH) {
+      throw new Error("File is too small. Corrupted or invalid format.");
     }
 
     const dataView = new Uint8Array(fileBuffer);
     
-    // Extract Metadata
-    const salt = dataView.slice(0, CRYPTO_CONSTANTS.SALT_LENGTH);
-    const iv = dataView.slice(
-      CRYPTO_CONSTANTS.SALT_LENGTH, 
-      CRYPTO_CONSTANTS.SALT_LENGTH + CRYPTO_CONSTANTS.IV_LENGTH
-    );
-    const ciphertext = dataView.slice(
-      CRYPTO_CONSTANTS.SALT_LENGTH + CRYPTO_CONSTANTS.IV_LENGTH
-    );
+    // 1. Validate Magic Header ("AEGIS")
+    for (let i = 0; i < FILE_MAGIC.length; i++) {
+      if (dataView[i] !== FILE_MAGIC[i]) {
+        throw new Error("Invalid file format. Not an .aegis file.");
+      }
+    }
 
+    // 2. Validate Version
+    const version = dataView[FILE_MAGIC.length];
+    if (version !== FILE_VERSION) {
+      throw new Error(`Unsupported file version: v${version}. Please update AegisCrypt.`);
+    }
+
+    let offset = FILE_MAGIC.length + 1; // Magic (5) + Version (1)
+
+    // 3. Extract Metadata
+    const salt = dataView.slice(offset, offset + CRYPTO_CONSTANTS.SALT_LENGTH);
+    offset += CRYPTO_CONSTANTS.SALT_LENGTH;
+
+    const iv = dataView.slice(offset, offset + CRYPTO_CONSTANTS.IV_LENGTH);
+    offset += CRYPTO_CONSTANTS.IV_LENGTH;
+
+    const ciphertext = dataView.slice(offset);
+
+    // 4. Decrypt
     const key = await deriveKey(password, salt, ['decrypt']);
 
     const decryptedContent = await window.crypto.subtle.decrypt(
@@ -115,8 +145,10 @@ export const decryptFileContent = async (fileBuffer: ArrayBuffer, password: stri
     );
 
     return decryptedContent;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Decryption failed:", error);
+    if (error.message.includes("Invalid file format")) throw error;
+    if (error.message.includes("Unsupported file version")) throw error;
     throw new Error("Decryption failed. Incorrect password or corrupted file.");
   }
 };

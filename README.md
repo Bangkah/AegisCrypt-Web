@@ -7,6 +7,7 @@ AegisCrypt Web is a modern, high-performance encryption tool built with **React*
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Security](https://img.shields.io/badge/Security-AES--256--GCM-green)
 ![Platform](https://img.shields.io/badge/Platform-Web-orange)
+![Format](https://img.shields.io/badge/Format-.aegis-purple)
 
 ---
 ## Demo
@@ -23,32 +24,31 @@ https://aegis-crypt-web.vercel.app/
   - **Key Derivation**: PBKDF2 with HMAC-SHA256 (100,000 iterations).
   - **Salt**: 16-byte cryptographically strong random salt.
   - **IV/Nonce**: 12-byte random initialization vector per file.
+- **Official .aegis Format**: Includes magic header and versioning for file integrity.
 - **Modern UI/UX**:
   - Drag & Drop support.
   - Recursive folder processing.
   - Real-time operation logging.
   - Dark mode interface designed with Tailwind CSS.
-- **Password Strength Meter**: Real-time feedback on password complexity.
-
 ---
 
 ## Technical Specifications
 
 AegisCrypt uses the browser's native `window.crypto.subtle` API for maximum performance and security.
 
-| Component | Specification | Description |
-|-----------|--------------|-------------|
-| **Encryption** | AES-GCM | 256-bit key length, 128-bit authentication tag. |
-| **KDF** | PBKDF2 | Derives key from password. Uses SHA-256. |
-| **Iterations** | 100,000 | Protects against brute-force attacks. |
-| **Salt** | 16 Bytes | Randomly generated per file. |
-| **IV** | 12 Bytes | Randomly generated per file to prevent pattern analysis. |
+### The `.aegis` File Format (v1)
 
-### Encrypted File Structure
-The output `.enc` file follows this binary structure:
-```text
-[ Salt (16 bytes) ] + [ IV (12 bytes) ] + [ Ciphertext + Auth Tag ]
-```
+AegisCrypt uses a custom binary format designed for integrity and future-proofing.
+
+| Offset | Size | Name | Description |
+|:---:|:---:|:---|:---|
+| 0 | 5 Bytes | **Magic** | Signature `AEGIS` (Hex: `41 45 47 49 53`) |
+| 5 | 1 Byte | **Version** | Format version (Current: `0x01`) |
+| 6 | 16 Bytes | **Salt** | Random bytes used for PBKDF2 key derivation |
+| 22 | 12 Bytes | **IV** | Initialization Vector for AES-GCM |
+| 34 | N Bytes | **Data** | Ciphertext + Auth Tag (16 bytes) |
+
+**Total Header Size**: 34 Bytes
 
 ---
 

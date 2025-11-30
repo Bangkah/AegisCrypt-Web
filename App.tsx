@@ -94,8 +94,7 @@ export default function App() {
         } else {
           // Decrypt
           if (!file.name.endsWith(EXTENSION_ENCRYPTED)) {
-             // Optional: warn user but try anyway
-             addLog(`File ${file.name} does not have .enc extension, attempting anyway...`, LogLevel.WARNING);
+             addLog(`Note: File ${file.name} does not have ${EXTENSION_ENCRYPTED} extension. Checking magic bytes...`, LogLevel.WARNING);
           }
           resultBuffer = await decryptFileContent(arrayBuffer, password);
           outputName = getDecryptedFilename(file.name);
@@ -143,7 +142,7 @@ export default function App() {
           <Shield className="w-8 h-8" />
           <div>
             <h1 className="font-bold text-xl text-slate-100 tracking-tight">AegisCrypt</h1>
-            <p className="text-xs text-slate-500">AES-256-GCM Secure</p>
+            <p className="text-xs text-slate-500">Official .aegis format</p>
           </div>
         </div>
 
@@ -183,7 +182,7 @@ export default function App() {
           <div className="flex justify-between items-end border-b border-slate-800 pb-6">
             <div>
               <h2 className="text-2xl font-semibold text-slate-100">Encryption Suite</h2>
-              <p className="text-slate-400 mt-1">Secure your files locally using Web Crypto API.</p>
+              <p className="text-slate-400 mt-1">Secure your files locally using standard <span className="text-emerald-400 font-mono">.aegis</span> format.</p>
             </div>
             <div className="flex gap-2">
               <button 
@@ -316,7 +315,7 @@ export default function App() {
              <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900/50 rounded-full border border-slate-800">
                 <RefreshCw className="w-3 h-3 text-emerald-500" />
                 <span className="text-[10px] text-slate-400">
-                   <strong>AES-256-GCM</strong> (128-bit Tag) • <strong>PBKDF2</strong> (100k iters, SHA-256) • <strong>Client-Side Only</strong>
+                   <strong>AES-256-GCM</strong> (128-bit Tag) • <strong>PBKDF2</strong> (100k iters, SHA-256) • <strong>.aegis v1</strong>
                 </span>
              </div>
           </div>
