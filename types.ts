@@ -13,22 +13,23 @@ export interface LogEntry {
   level: LogLevel;
 }
 
-export interface FileMetadata {
-  name: string;
-  size: number;
-  type: string;
-  lastModified: number;
+export interface CryptoProgress {
+  percent: number;
+  currentFile: string;
+  bytesProcessed: number;
+  totalBytes: number;
+  speed: number; // MB/s
+  eta: number; // Seconds remaining
 }
 
-export interface ProcessedFileHistory {
-  id: string;
+export interface ProcessedResult {
   fileName: string;
-  operation: 'ENCRYPT' | 'DECRYPT';
-  timestamp: Date;
-  status: 'SUCCESS' | 'FAILED';
+  status: 'SUCCESS' | 'FAILED' | 'CANCELLED';
+  error?: string;
 }
 
-export interface EncryptionConfig {
+export interface AuthSession {
   password: string;
-  keyFile?: File | null;
+  keyFile: File | null;
+  keyFileBuffer: ArrayBuffer | null;
 }

@@ -1,5 +1,6 @@
+
 import React, { useState, useEffect } from 'react';
-import { Eye, EyeOff, Lock } from 'lucide-react';
+import { Eye, EyeOff, Lock, Check, X } from 'lucide-react';
 
 interface PasswordInputProps {
   value: string;
@@ -9,78 +10,69 @@ interface PasswordInputProps {
 
 export const PasswordInput: React.FC<PasswordInputProps> = ({ value, onChange, disabled }) => {
   const [show, setShow] = useState(false);
-  const [strength, setStrength] = useState<'Weak' | 'Medium' | 'Strong' | 'Empty'>('Empty');
+  const [strength, setStrength] = useState(0); // 0-4
 
   useEffect(() => {
-    if (value.length === 0) {
-      setStrength('Empty');
-      return;
-    }
-    if (value.length < 8) {
-      setStrength('Weak');
-      return;
-    }
-    const hasNumber = /\d/.test(value);
-    const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(value);
-    const hasUpper = /[A-Z]/.test(value);
-
-    if (hasNumber && hasSpecial && hasUpper && value.length >= 10) {
-      setStrength('Strong');
-    } else if ((hasNumber || hasSpecial) && value.length >= 8) {
-      setStrength('Medium');
-    } else {
-      setStrength('Weak');
-    }
+    let score = 0;
+    if (!value) { setStrength(0); return; }
+    if (value.length > 7) score++;
+    if (value.length > 12) score++;
+    if (/[A-Z]/.test(value)) score++;
+    if (/[0-9]/.test(value) || /[^A-Za-z0-9]/.test(value)) score++;
+    setStrength(score);
   }, [value]);
 
-  const getStrengthColor = () => {
-    switch (strength) {
-      case 'Strong': return 'bg-emerald-500';
-      case 'Medium': return 'bg-amber-500';
-      case 'Weak': return 'bg-rose-500';
-      default: return 'bg-slate-700';
-    }
+  const strengthColor = () => {
+    if (strength <= 1) return 'bg-rose-500 shadow-rose-500/50';
+    if (strength === 2) return 'bg-amber-500 shadow-amber-500/50';
+    if (strength === 3) return 'bg-blue-500 shadow-blue-500/50';
+    return 'bg-emerald-500 shadow-emerald-500/50';
+  };
+
+  const strengthLabel = () => {
+    if (strength <= 1) return 'Weak';
+    if (strength === 2) return 'Fair';
+    if (strength === 3) return 'Good';
+    return 'Excellent';
   };
 
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
-        <Lock className="w-4 h-4" />
-        Encryption Password
-      </label>
-      <div className="relative">
+    <div className="space-y-3">
+      <div className="relative group">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <Lock className={`w-5 h-5 transition-colors duration-300 ${value ? 'text-blue-400' : 'text-slate-500'}`} />
+        </div>
         <input
           type={show ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          placeholder="Enter a strong password"
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg py-3 pl-4 pr-12 text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all disabled:opacity-50"
+          placeholder="Enter encryption password"
+          className="w-full bg-slate-900/50 backdrop-blur-md border border-slate-700 rounded-xl py-3.5 pl-10 pr-12 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium tracking-wide"
         />
         <button
           onClick={() => setShow(!show)}
           disabled={disabled}
-          className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 focus:outline-none"
+          className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
         >
           {show ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
         </button>
       </div>
       
-      {/* Strength Indicator */}
-      <div className="flex items-center gap-2">
-        <div className="h-1 flex-1 bg-slate-800 rounded-full overflow-hidden">
-          <div 
-            className={`h-full transition-all duration-500 ${getStrengthColor()}`} 
-            style={{ width: strength === 'Empty' ? '0%' : strength === 'Weak' ? '33%' : strength === 'Medium' ? '66%' : '100%' }}
-          />
-        </div>
-        <span className={`text-xs font-semibold ${
-          strength === 'Strong' ? 'text-emerald-500' : 
-          strength === 'Medium' ? 'text-amber-500' : 
-          strength === 'Weak' ? 'text-rose-500' : 'text-slate-500'
-        }`}>
-          {strength === 'Empty' ? 'Required' : strength}
-        </span>
+      {/* Strength Bar */}
+      <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden flex items-center">
+         <div 
+            className={`h-full transition-all duration-500 ease-out ${value ? strengthColor() : 'w-0'}`} 
+            style={{ width: `${(strength / 4) * 100}%` }}
+         />
+      </div>
+      <div className="flex justify-between items-center text-xs">
+         <span className={`font-semibold transition-colors duration-300 ${
+           strength <= 1 ? 'text-rose-400' : strength === 2 ? 'text-amber-400' : strength === 3 ? 'text-blue-400' : 'text-emerald-400'
+         }`}>
+           {value ? strengthLabel() : 'Password required'}
+         </span>
+         <span className="text-slate-500">{value.length} chars</span>
       </div>
     </div>
   );
